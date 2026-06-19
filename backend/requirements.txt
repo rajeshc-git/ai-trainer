@@ -1,0 +1,32 @@
+# Web framework
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+aiofiles==23.2.1
+websockets==12.0
+httpx==0.27.0
+
+# Auth
+python-jose[cryptography]==3.3.0
+
+# Job queue / pub-sub
+redis==5.0.7
+
+# ML / training stack
+transformers==4.42.4
+datasets==2.20.0
+accelerate==0.32.1
+peft==0.11.1
+trl==0.9.6
+bitsandbytes==0.45.5  # >=0.45 required for Blackwell (sm_120) 4-bit kernels
+sentencepiece==0.2.0
+huggingface_hub==0.24.6   # model search (HfApi) + download progress (tqdm_class)
+protobuf==4.25.3          # required by llama.cpp's convert_hf_to_gguf.py for some tokenizers
+
+# Data / science
+scipy==1.13.1
+scikit-learn==1.5.1
+pandas==2.2.2
+
+# NOTE: torch is installed separately in the Dockerfile with the
+# correct CUDA 12.8 (cu128) wheel index, so it is intentionally NOT listed here.

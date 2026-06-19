@@ -1,0 +1,74 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ft_backend
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app
+      - ./datasets:/datasets
+      - ./models:/models
+    ports:
+      - "8000:8000"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1
+      - REDIS_URL=redis://redis:6379/0
+      - HF_HOME=/models/.hf_cache
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      # Optional: token for gated/private Hugging Face models (Llama, Gemma…).
+      # Read automatically by `transformers`/`huggingface_hub`. Blank = public only.
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      # The backend code is volume-mounted above, so --reload picks up .py edits
+      # live — no rebuild/restart needed. Polling is required for the host→container
+      # file events to fire reliably on Windows/macOS Docker Desktop.
+      - WATCHFILES_FORCE_POLLING=true
+    # Hot-reload on code changes (dev). Overrides the image CMD.
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      redis:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  frontend:
+    image: node:20-alpine
+    container_name: ft_frontend
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+      - CHOKIDAR_USEPOLLING=true
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    container_name: ft_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:
