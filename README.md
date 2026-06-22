@@ -2,8 +2,6 @@
 
 Fine-tune any Hugging Face model on **your own dataset**, using **your local NVIDIA GPU**, with **real-time training progress** and **zero coding required** — then chat with your trained model right in the browser or call it from your own apps via a built-in API.
 
-![screenshot placeholder](docs/screenshot-dashboard.png)
-<!-- Add screenshots to ./docs and they will render here -->
 
 ---
 
