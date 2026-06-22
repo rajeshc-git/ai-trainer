@@ -45,6 +45,7 @@ from utils import (
     gpu_total_mb,
     is_cancelled,
     load_job,
+    load_tokenizer,
     publish_log,
     get_redis,
     now,
@@ -161,13 +162,14 @@ def _train_impl(job_id: str, params: dict[str, Any]) -> None:
 
 def _train_body(job_id: str, params: dict[str, Any]) -> tuple[Any, Any]:
     """Run the fine-tune and return ``(model, trainer)`` for cleanup."""
+    # pyrefly: ignore [missing-import]
     import torch
     from datasets import Dataset
+    # pyrefly: ignore [missing-import]
     from transformers import (
         AutoConfig,
         AutoModelForCausalLM,
         AutoModelForSeq2SeqLM,
-        AutoTokenizer,
         TrainerCallback,
         set_seed,
     )
@@ -234,13 +236,15 @@ def _train_body(job_id: str, params: dict[str, Any]) -> tuple[Any, Any]:
 
     # ── Detect architecture ─────────────────────────────────
     log_info(job_id, "Inspecting model architecture...")
-    config = AutoConfig.from_pretrained(model_name)
+    config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
     is_seq2seq = bool(getattr(config, "is_encoder_decoder", False))
     arch = "seq2seq (T5-style)" if is_seq2seq else "causal LM (GPT-style)"
     log_info(job_id, f"Detected architecture: {arch}")
 
     # ── Tokenizer ───────────────────────────────────────────
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # load_tokenizer() falls back to the slow tokenizer if the fast (Rust) one
+    # can't parse this model's tokenizer.json, so any downloadable model loads.
+    tokenizer = load_tokenizer(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token
 
@@ -248,6 +252,7 @@ def _train_body(job_id: str, params: dict[str, Any]) -> tuple[Any, Any]:
     quant_config = None
     if has_gpu:
         try:
+            # pyrefly: ignore [missing-import]
             from transformers import BitsAndBytesConfig
 
             quant_config = BitsAndBytesConfig(
@@ -274,10 +279,12 @@ def _train_body(job_id: str, params: dict[str, Any]) -> tuple[Any, Any]:
         # Loading with device_map="auto" can make Trainer.train() refuse to run.
         model_kwargs["torch_dtype"] = compute_dtype
 
+    model_kwargs["trust_remote_code"] = True
     model = model_cls.from_pretrained(model_name, **model_kwargs)
     log_info(job_id, "Base model loaded")
 
     # ── LoRA via PEFT ───────────────────────────────────────
+    # pyrefly: ignore [missing-import]
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
     if quant_config is not None:
@@ -535,6 +542,7 @@ def _run_trainer(
     weights are restored at the end (``load_best_model_at_end``) and training
     stops early once ``eval_loss`` stops improving.
     """
+    # pyrefly: ignore [missing-import]
     from transformers import (
         DataCollatorForSeq2Seq,
         EarlyStoppingCallback,
@@ -593,15 +601,24 @@ def _run_trainer(
             callbacks=callbacks,
         )
     else:
+        # pyrefly: ignore [missing-import]
         from trl import SFTConfig, SFTTrainer
 
         # TRL >= 0.9 takes its own config object that subclasses TrainingArguments.
-        sft_args = SFTConfig(
-            max_seq_length=max_length,
-            packing=False,
-            dataset_text_field="text",
-            **common,
-        )
+        try:
+            sft_args = SFTConfig(
+                max_seq_length=max_length,
+                packing=False,
+                dataset_text_field="text",
+                **common,
+            )
+        except TypeError:
+            sft_args = SFTConfig(
+                max_length=max_length,
+                packing=False,
+                dataset_text_field="text",
+                **common,
+            )
         try:
             trainer = SFTTrainer(
                 model=model,
@@ -703,6 +720,17 @@ def _auto_target_modules(model: Any) -> list[str]:
 def _humanize_error(exc: Exception) -> tuple[str, str]:
     """Map a raw exception to a friendly (error, suggestion) pair."""
     text = str(exc).lower()
+    if (
+        "untagged enum" in text
+        or "modelwrapper" in text
+        or "data did not match any variant" in text
+        or "tokenizer format is newer" in text
+    ):
+        return (
+            "This model's tokenizer is too new for the installed libraries.",
+            "Update the backend's transformers/tokenizers and rebuild the image, "
+            "then try again.",
+        )
     if "out of memory" in text or "cuda oom" in text or "outofmemory" in text:
         return (
             "Not enough GPU memory.",

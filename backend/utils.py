@@ -286,6 +286,79 @@ def validate_dataframe(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+# ─────────────────────────────────────────────────────────────
+# Model loading helpers
+# ─────────────────────────────────────────────────────────────
+def _is_fast_tokenizer_parse_error(exc: Exception) -> bool:
+    """True if ``exc`` is the Rust fast-tokenizer failing to parse tokenizer.json.
+
+    The ``tokenizers`` library deserializes ``tokenizer.json`` with serde. When a
+    model ships a *newer* tokenizer format than the installed ``tokenizers`` build
+    understands, no enum variant matches and it raises, e.g.::
+
+        data did not match any variant of untagged enum ModelWrapper at line ... column ...
+
+    We match on the stable fragments of that message (it is not a dedicated
+    exception type) so we can transparently retry with the slow tokenizer.
+    """
+    msg = str(exc).lower()
+    return (
+        "untagged enum" in msg
+        or "modelwrapper" in msg
+        or "data did not match any variant" in msg
+    )
+
+
+def load_tokenizer(model_name_or_path: str, **kwargs: Any) -> Any:
+    """Load a tokenizer for *any* model, resilient to fast/slow parse failures.
+
+    Tries the fast (Rust) tokenizer first — it is faster and what most models
+    ship. If it fails *specifically* because the installed ``tokenizers`` library
+    is too old to parse the model's ``tokenizer.json`` (see
+    :func:`_is_fast_tokenizer_parse_error`), we transparently retry with the
+    pure-Python *slow* tokenizer, which is far more lenient and works for any
+    model that still ships its original vocab / merges / ``sentencepiece`` files.
+
+    This keeps fine-tuning working across the whole model zoo without hard-coding
+    per-model logic: mainstream models load on the fast path, sentencepiece-based
+    models survive a version skew via the slow path, and anything that can load on
+    neither raises a clear, actionable error instead of the cryptic serde message.
+
+    Note: a few tiktoken-style tokenizers (e.g. Llama 3.x) are *fast-only* and
+    have no slow implementation, so for those the fast path must succeed — which
+    is why the backend also pins a modern ``tokenizers`` baseline.
+
+    Args:
+        model_name_or_path: HF model id or a local directory.
+        **kwargs: Passed through to ``AutoTokenizer.from_pretrained``.
+
+    Returns:
+        The loaded tokenizer.
+    """
+    # pyrefly: ignore [missing-import]
+    from transformers import AutoTokenizer
+
+    kwargs.setdefault("trust_remote_code", True)
+    try:
+        return AutoTokenizer.from_pretrained(model_name_or_path, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - inspect, then either retry or re-raise
+        if not _is_fast_tokenizer_parse_error(exc):
+            raise
+        # Fast tokenizer couldn't parse the format — retry on the slow path.
+        kwargs.pop("use_fast", None)
+        try:
+            return AutoTokenizer.from_pretrained(
+                model_name_or_path, use_fast=False, **kwargs
+            )
+        except Exception as slow_exc:  # noqa: BLE001 - both paths failed
+            raise RuntimeError(
+                "This model's tokenizer format is newer than the installed "
+                "'tokenizers' library can read, and the model has no slow "
+                "(Python) tokenizer to fall back on. Update the backend's "
+                "'transformers'/'tokenizers' dependencies and rebuild the image."
+            ) from slow_exc
+
+
 def extract_model_id(raw: str) -> str:
     """Extract a bare Hugging Face model id from a URL or plain name.
 
@@ -308,6 +381,8 @@ def extract_model_id(raw: str) -> str:
 def save_job(job_id: str, data: dict[str, Any]) -> None:
     """Persist (merge) a job's state into Redis as a JSON blob."""
     r = get_redis()
+    if r.exists(f"ftdeleted:{job_id}"):
+        return
     existing = load_job(job_id) or {}
     existing.update(data)
     existing["job_id"] = job_id
@@ -337,6 +412,7 @@ def list_jobs() -> list[dict[str, Any]]:
 def delete_job(job_id: str) -> None:
     """Delete a job's state and log buffers from Redis."""
     r = get_redis()
+    r.set(f"ftdeleted:{job_id}", "1", ex=3600)
     r.delete(f"{JOB_KEY_PREFIX}{job_id}")
     r.srem("ftjobs:all", job_id)
     r.delete(f"ftlogbuf:{job_id}")

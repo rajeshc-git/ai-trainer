@@ -27,9 +27,14 @@ def _log(msg: str) -> None:
 
 
 def merge(adapter_dir: str, out_dir: str, device: str) -> None:
+    # pyrefly: ignore [missing-import]
     import torch
+    # pyrefly: ignore [missing-import]
     from peft import PeftConfig, PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    # pyrefly: ignore [missing-import]
+    from transformers import AutoModelForCausalLM
+
+    from utils import load_tokenizer
 
     token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN") or None
     peft_config = PeftConfig.from_pretrained(adapter_dir)
@@ -37,7 +42,7 @@ def merge(adapter_dir: str, out_dir: str, device: str) -> None:
     _log(f"Base model: {base_model_name}")
 
     def _load_base(dev: str):
-        kwargs = dict(torch_dtype=torch.float16, low_cpu_mem_usage=True, token=token)
+        kwargs = dict(torch_dtype=torch.float16, low_cpu_mem_usage=True, token=token, trust_remote_code=True)
         # Whole model on one device — never "auto" (which could offload and
         # silently run at CPU speed).
         kwargs["device_map"] = {"": 0} if dev == "cuda" else "cpu"
@@ -61,7 +66,7 @@ def merge(adapter_dir: str, out_dir: str, device: str) -> None:
 
     os.makedirs(out_dir, exist_ok=True)
     model.save_pretrained(out_dir, safe_serialization=True)
-    AutoTokenizer.from_pretrained(adapter_dir).save_pretrained(out_dir)
+    load_tokenizer(adapter_dir).save_pretrained(out_dir)
     _log("Merge complete.")
 
 

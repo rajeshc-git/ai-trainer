@@ -166,13 +166,7 @@ async def delete_training_job(job_id: str) -> JSONResponse:
             detail={"error": "Job not found.", "suggestion": "Check the job id."},
         )
     if job.get("status") in ("queued", "running"):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Cannot delete an active training job.",
-                "suggestion": "Cancel the job first before removing it from the history.",
-            },
-        )
+        set_cancel_flag(job_id)
     delete_job(job_id)
     return JSONResponse(
         status_code=200,

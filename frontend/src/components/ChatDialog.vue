@@ -7,9 +7,10 @@ import {
   TransitionRoot,
 } from '@headlessui/vue'
 import { Send, X, Bot, User, Loader2, Sliders, PowerOff } from 'lucide-vue-next'
-import { api } from '@/lib/api'
+import { api, API_BASE } from '@/lib/api'
 import type { SavedModel } from '@/lib/api'
 import { useToastStore } from '@/stores/toast'
+import { marked } from 'marked'
 
 const props = defineProps<{ open: boolean; model: SavedModel | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -28,6 +29,14 @@ const temperature = ref(0.7)
 const maxNewTokens = ref(256)
 const unloading = ref(false)
 
+function renderMarkdown(text: string): string {
+  try {
+    return marked.parse(text, { breaks: true, gfm: true }) as string
+  } catch (e) {
+    return text
+  }
+}
+
 // Reset the conversation whenever a different model is opened.
 watch(
   () => props.model?.job_id,
@@ -44,19 +53,53 @@ async function send(): Promise<void> {
   input.value = ''
   sending.value = true
   await scrollDown()
+
+  const assistantMsgIndex = messages.value.length
+  messages.value.push({ role: 'assistant', text: '' })
+  await scrollDown()
+
   try {
-    const { response } = await api.chat(props.model.job_id, text, {
-      temperature: temperature.value,
-      max_new_tokens: maxNewTokens.value,
+    const response = await fetch(`${API_BASE}/api/inference/${props.model.job_id}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: text,
+        temperature: temperature.value,
+        max_new_tokens: maxNewTokens.value,
+      }),
     })
-    messages.value.push({ role: 'assistant', text: response })
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}))
+      throw new Error(errData?.detail?.error ?? 'Server error during stream generation.')
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('Response body is not readable')
+    }
+
+    const decoder = new TextDecoder()
+    let done = false
+    while (!done) {
+      const { value, done: doneReading } = await reader.read()
+      done = doneReading
+      if (value) {
+        const chunk = decoder.decode(value, { stream: !done })
+        messages.value[assistantMsgIndex].text += chunk
+        await scrollDown()
+      }
+    }
   } catch (e: any) {
-    const detail = e?.response?.data?.detail
-    messages.value.push({
-      role: 'assistant',
-      text: `⚠️ ${detail?.error ?? 'The model could not generate a response.'} ${detail?.suggestion ?? ''}`,
-    })
-    toast.error('Inference failed', detail?.suggestion)
+    const errMsg = e.message || 'The model could not generate a response.'
+    if (messages.value[assistantMsgIndex].text) {
+      messages.value[assistantMsgIndex].text += `\n\n⚠️ Stream error: ${errMsg}`
+    } else {
+      messages.value[assistantMsgIndex].text = `⚠️ ${errMsg}`
+    }
+    toast.error('Inference failed', errMsg)
   } finally {
     sending.value = false
     await scrollDown()
@@ -167,19 +210,22 @@ async function unload(): Promise<void> {
                   <component :is="m.role === 'user' ? User : Bot" class="h-4 w-4" />
                 </div>
                 <div
-                  class="max-w-[75%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm"
-                  :class="m.role === 'user' ? 'bg-success/15 text-fg' : 'bg-surface-2 text-fg'"
+                  class="max-w-[75%] markdown-body break-words rounded-2xl px-4 py-2.5 text-sm"
+                  :class="[
+                    m.role === 'user' ? 'bg-success/15 text-fg' : 'bg-surface-2 text-fg',
+                    sending && i === messages.length - 1 ? 'is-streaming' : ''
+                  ]"
                 >
-                  {{ m.text }}
-                </div>
-              </div>
-
-              <div v-if="sending" class="flex gap-3">
-                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/15 text-accent">
-                  <Bot class="h-4 w-4" />
-                </div>
-                <div class="rounded-2xl bg-surface-2 px-4 py-3">
-                  <Loader2 class="h-4 w-4 animate-spin text-fg-muted" />
+                  <template v-if="m.role === 'assistant' && !m.text">
+                    <div class="flex items-center gap-1.5 py-1">
+                      <div class="h-2.5 w-2.5 animate-bounce rounded-full bg-accent/70" style="animation-delay: 0ms"></div>
+                      <div class="h-2.5 w-2.5 animate-bounce rounded-full bg-accent/70" style="animation-delay: 150ms"></div>
+                      <div class="h-2.5 w-2.5 animate-bounce rounded-full bg-accent/70" style="animation-delay: 300ms"></div>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <div v-html="renderMarkdown(m.text)"></div>
+                  </template>
                 </div>
               </div>
             </div>

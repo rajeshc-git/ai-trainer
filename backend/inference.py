@@ -26,6 +26,7 @@ from utils import (
     build_prompt,
     build_seq2seq_src,
     detect_gpu,
+    load_tokenizer,
     release_gpu_memory,
 )
 
@@ -138,12 +139,14 @@ def _load_model(job_id: str) -> tuple[Any, Any, dict]:
             _touch(job_id)
             return _CACHE[job_id]
 
+    # pyrefly: ignore [missing-import]
     import torch
+    # pyrefly: ignore [missing-import]
     from peft import PeftConfig, PeftModel
+    # pyrefly: ignore [missing-import]
     from transformers import (
         AutoModelForCausalLM,
         AutoModelForSeq2SeqLM,
-        AutoTokenizer,
     )
 
     model_dir = _model_dir(job_id)
@@ -167,6 +170,7 @@ def _load_model(job_id: str) -> tuple[Any, Any, dict]:
             use_bf16 = torch.cuda.is_bf16_supported()
             compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
             try:
+                # pyrefly: ignore [missing-import]
                 from transformers import BitsAndBytesConfig
 
                 load_kwargs["quantization_config"] = BitsAndBytesConfig(
@@ -179,12 +183,13 @@ def _load_model(job_id: str) -> tuple[Any, Any, dict]:
                 # bitsandbytes unavailable — fall back to fp16 (may not fit big models).
                 load_kwargs["torch_dtype"] = compute_dtype
             load_kwargs["device_map"] = "auto"
+        load_kwargs["trust_remote_code"] = True
 
         base = model_cls.from_pretrained(base_model_name, **load_kwargs)
         model = PeftModel.from_pretrained(base, str(model_dir))
         model.eval()
 
-        tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
+        tokenizer = load_tokenizer(str(model_dir))
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token
     except InferenceError:
@@ -242,6 +247,7 @@ def generate(
     Raises:
         InferenceError: With a friendly message on any failure.
     """
+    # pyrefly: ignore [missing-import]
     import torch
 
     model, tokenizer, meta = _load_model(job_id)
@@ -337,3 +343,106 @@ def loaded_models() -> list[str]:
     """Return the job ids of the models currently resident in memory."""
     with _CACHE_LOCK:
         return list(_CACHE.keys())
+
+
+def generate_stream(
+    job_id: str,
+    message: str,
+    *,
+    instruction: Optional[str] = None,
+    max_new_tokens: int = 256,
+    temperature: float = 0.7,
+    top_p: float = 0.95,
+):
+    """Generate a streaming response from the fine-tuned model."""
+    # pyrefly: ignore [missing-import]
+    import torch
+    # pyrefly: ignore [missing-import]
+    from transformers import TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList
+    from threading import Thread
+
+    model, tokenizer, meta = _load_model(job_id)
+    is_seq2seq = bool(meta.get("is_seq2seq"))
+
+    row = {"instruction": instruction or "", "input": message, "output": ""}
+    if is_seq2seq:
+        prompt = build_seq2seq_src(row)
+    else:
+        prompt = build_prompt(row).rstrip()
+
+    try:
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+        device = next(model.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        # For causal models, we skip the prompt in the streamer
+        streamer = TextIteratorStreamer(tokenizer, skip_prompt=not is_seq2seq, skip_special_tokens=True)
+
+        stop_markers = ["### Instruction", "### Input", "### Response"]
+        prompt_len = 0 if is_seq2seq else inputs["input_ids"].shape[1]
+
+        class StopOnTokens(StoppingCriteria):
+            def __init__(self, tokenizer, stop_strings, start_idx):
+                self.tokenizer = tokenizer
+                self.stop_strings = stop_strings
+                self.start_idx = start_idx
+
+            def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+                ids_to_decode = input_ids[0][self.start_idx:]
+                text = self.tokenizer.decode(ids_to_decode, skip_special_tokens=True)
+                for stop_str in self.stop_strings:
+                    if stop_str in text:
+                        return True
+                return False
+
+        stopping_criteria = StoppingCriteriaList([StopOnTokens(tokenizer, stop_markers, prompt_len)])
+
+        gen_kwargs = {
+            **inputs,
+            "streamer": streamer,
+            "max_new_tokens": int(max_new_tokens),
+            "do_sample": temperature > 0,
+            "temperature": max(temperature, 1e-4),
+            "top_p": top_p,
+            "pad_token_id": tokenizer.pad_token_id,
+            "stopping_criteria": stopping_criteria,
+        }
+
+        # Wrap generation in try-finally to guarantee streamer termination
+        def generate_with_sentinel():
+            try:
+                model.generate(**gen_kwargs)
+            except Exception as e:
+                print(f"[generate_stream] Generation thread failed: {e}", flush=True)
+            finally:
+                streamer.end()
+
+        thread = Thread(target=generate_with_sentinel)
+        thread.start()
+
+        accumulated = ""
+        for new_text in streamer:
+            accumulated += new_text
+            
+            matched_marker = None
+            for marker in stop_markers:
+                if marker in accumulated:
+                    matched_marker = marker
+                    break
+            
+            if matched_marker:
+                idx = accumulated.find(matched_marker)
+                already_yielded_len = len(accumulated) - len(new_text)
+                to_yield = accumulated[:idx][already_yielded_len:]
+                if to_yield:
+                    yield to_yield
+                break
+            
+            yield new_text
+
+        thread.join()
+    except Exception as exc:
+        raise InferenceError(
+            "The model failed to generate a response.",
+            f"Try again, or pick a different model. ({exc})",
+        ) from exc

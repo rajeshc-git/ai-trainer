@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 import inference
 from schemas_inference import (
@@ -35,8 +35,11 @@ async def _run_generate(job_id: str, message: str, instruction, max_new_tokens, 
             inference.generate,
             job_id,
             message,
+            # pyrefly: ignore [unexpected-keyword]
             instruction=instruction,
+            # pyrefly: ignore [unexpected-keyword]
             max_new_tokens=max_new_tokens,
+            # pyrefly: ignore [unexpected-keyword]
             temperature=temperature,
         )
     except inference.InferenceError as exc:
@@ -53,6 +56,25 @@ async def chat(job_id: str, req: ChatRequest) -> JSONResponse:
         job_id, req.message, req.instruction, req.max_new_tokens, req.temperature
     )
     return JSONResponse(status_code=200, content={"response": text, "job_id": job_id})
+
+
+@router.post("/{job_id}/chat/stream")
+async def chat_stream(job_id: str, req: ChatRequest) -> StreamingResponse:
+    """Stream chat responses token-by-token using StreamingResponse."""
+    def generator():
+        try:
+            for token in inference.generate_stream(
+                job_id,
+                req.message,
+                instruction=req.instruction,
+                max_new_tokens=req.max_new_tokens,
+                temperature=req.temperature,
+            ):
+                yield token
+        except Exception as exc:
+            yield f"\n⚠️ Error: {exc}"
+
+    return StreamingResponse(generator(), media_type="text/plain")
 
 
 @router.post("/{job_id}/generate", response_model=ChatResponse)

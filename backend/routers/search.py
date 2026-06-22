@@ -62,7 +62,6 @@ def search_models(
         "search": q or None,
         "pipeline_tag": "text-generation",
         "sort": "downloads",
-        "direction": -1,
         "limit": limit,
     }
     if source == "unsloth":
@@ -71,10 +70,15 @@ def search_models(
     try:
         results = list(api.list_models(**kwargs))
     except TypeError:
-        # Older/newer signature differences — retry with the minimal set.
-        results = list(
-            api.list_models(search=q or None, sort="downloads", limit=limit)
-        )
+        # Older/newer signature differences — retry with fallback parameters
+        fallback = {
+            "search": q or None,
+            "sort": "downloads",
+            "limit": limit,
+        }
+        if source == "unsloth":
+            fallback["author"] = "unsloth"
+        results = list(api.list_models(**fallback))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=502,

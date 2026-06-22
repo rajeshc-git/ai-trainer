@@ -286,22 +286,23 @@ function fmtDate(ts: number | null): string {
               </td>
               <td class="px-6 py-3 text-fg-muted">{{ fmtDate(job.started_at) }}</td>
               <td class="px-6 py-3 text-right">
-                <button
-                  v-if="job.status === 'running' || job.status === 'queued'"
-                  class="text-accent hover:bg-accent/10 p-1.5 rounded-lg transition-all duration-200"
-                  title="Monitor active training"
-                  @click.stop="router.push('/train')"
-                >
-                  <Activity class="h-4 w-4 animate-pulse" />
-                </button>
-                <button
-                  v-else
-                  class="text-fg-subtle hover:text-danger p-1.5 rounded-lg hover:bg-danger/10 transition-all duration-200 opacity-0 group-hover:opacity-100 focus:opacity-100 animate-fade-in"
-                  title="Delete job history"
-                  @click.stop="confirmDeleteJob(job)"
-                >
-                  <Trash2 class="h-4 w-4" />
-                </button>
+                <div class="flex items-center justify-end gap-1">
+                  <button
+                    v-if="job.status === 'running' || job.status === 'queued'"
+                    class="text-accent hover:bg-accent/10 p-1.5 rounded-lg transition-all duration-200"
+                    title="Monitor active training"
+                    @click.stop="router.push('/train')"
+                  >
+                    <Activity class="h-4 w-4 animate-pulse" />
+                  </button>
+                  <button
+                    class="text-fg-subtle hover:text-danger p-1.5 rounded-lg hover:bg-danger/10 transition-all duration-200 opacity-0 group-hover:opacity-100 focus:opacity-100 animate-fade-in"
+                    title="Delete job history"
+                    @click.stop="confirmDeleteJob(job)"
+                  >
+                    <Trash2 class="h-4 w-4" />
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -326,7 +327,12 @@ function fmtDate(ts: number | null): string {
             </div>
             <p class="text-sm text-fg-muted leading-relaxed">
               Are you sure you want to remove the history for <strong class="text-fg">{{ deletingJob.model_name || 'Unnamed model' }}</strong>? 
-              This will only delete the training history and logs from the dashboard. Your fine-tuned model files will <strong class="text-success">not</strong> be deleted.
+              <span v-if="deletingJob.status === 'running' || deletingJob.status === 'queued'" class="block mt-2 text-danger font-semibold">
+                ⚠️ This job is currently active. Deleting it will cancel the running fine-tuning process.
+              </span>
+              <span v-else class="block mt-2">
+                This will only delete the training history and logs from the dashboard. Your fine-tuned model files will <strong class="text-success">not</strong> be deleted.
+              </span>
             </p>
             <div class="mt-6 flex justify-end gap-3">
               <button

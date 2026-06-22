@@ -353,7 +353,11 @@ function next(): void {
   if (current.value < steps.length - 1) current.value++
 }
 function prev(): void {
-  if (current.value > 0) current.value--
+  if (current.value > 0) {
+    current.value--
+  } else {
+    router.push('/')
+  }
 }
 
 const canProceed = computed(() => {
@@ -951,7 +955,11 @@ const canProceed = computed(() => {
 
     <!-- Wizard navigation -->
     <div class="flex items-center justify-between">
-      <button class="btn-ghost" :disabled="current === 0" @click="prev">
+      <button
+        class="btn-ghost"
+        :disabled="current === 3 && training.isRunning"
+        @click="prev"
+      >
         <ArrowLeft class="h-4 w-4" /> Back
       </button>
       <button
