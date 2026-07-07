@@ -1,7 +1,24 @@
 # 🧠 AI Trainer
 
-Fine-tune any Hugging Face model on **your own dataset**, using **your local NVIDIA GPU**, with **real-time training progress** and **zero coding required** — then chat with your trained model right in the browser or call it from your own apps via a built-in API.
+<p align="center">
+  <a href="https://github.com/rajeshc-git/ai-trainer/graphs/contributors">
+    <img src="https://img.shields.io/github/contributors/rajeshc-git/ai-trainer?style=for-the-badge&logo=github&color=32CD32" alt="Contributors" />
+  </a>
+  <a href="https://github.com/rajeshc-git/ai-trainer/network/members">
+    <img src="https://img.shields.io/github/forks/rajeshc-git/ai-trainer?style=for-the-badge&logo=git&color=008080" alt="Forks" />
+  </a>
+  <a href="https://github.com/rajeshc-git/ai-trainer/stargazers">
+    <img src="https://img.shields.io/github/stars/rajeshc-git/ai-trainer?style=for-the-badge&logo=github&color=FFD700" alt="Stars" />
+  </a>
+  <a href="https://github.com/rajeshc-git/ai-trainer/issues">
+    <img src="https://img.shields.io/github/issues/rajeshc-git/ai-trainer?style=for-the-badge&logo=github&color=FF4500" alt="Issues" />
+  </a>
+  <a href="https://github.com/rajeshc-git/ai-trainer/pulls">
+    <img src="https://img.shields.io/github/issues-pr/rajeshc-git/ai-trainer?style=for-the-badge&logo=git&color=1E90FF" alt="Pull Requests" />
+  </a>
+</p>
 
+Fine-tune any Hugging Face model on **your own dataset**, using **your local NVIDIA GPU**, with **real-time training progress** and **zero coding required** — then chat with your trained model right in the browser or call it from your own apps via a built-in API.
 
 ---
 
@@ -293,6 +310,29 @@ Models are saved to `./models/<job_id>/`, datasets to `./datasets/`. Both are bi
         └── components/    # DropZone, LossChart, LogTerminal, MetricCard,
                            # ModelCard, StepperNav, GpuBadge, ChatDialog, ...
 ```
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions of all kinds! Whether you are writing code, fixing bugs, updating documentation, or proposing new features, your help makes AI Trainer better.
+
+### How to Contribute:
+1. **Fork the Repository** to your own account.
+2. **Clone the Fork** to your local machine.
+3. **Create a Feature Branch** (`git checkout -b feature/cool-new-feature`).
+4. **Commit Your Changes** (`git commit -m 'Add cool new feature'`).
+5. **Push to Your Branch** (`git push origin feature/cool-new-feature`).
+6. **Open a Pull Request** against the `main` branch.
+
+<p align="center">
+  <a href="https://github.com/rajeshc-git/ai-trainer/graphs/contributors">
+    <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge&logo=github" alt="PRs Welcome" />
+  </a>
+  <a href="https://github.com/rajeshc-git/ai-trainer/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge&logo=opensourceinitiative" alt="MIT License" />
+  </a>
+</p>
 
 ---
 
