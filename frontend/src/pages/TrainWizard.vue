@@ -21,6 +21,7 @@ import {
   FileText,
   Layers,
   ShieldCheck,
+  RotateCcw,
 } from 'lucide-vue-next'
 import StepperNav from '@/components/StepperNav.vue'
 import DropZone from '@/components/DropZone.vue'
@@ -131,6 +132,30 @@ const learningRateExp = ref(-3.7) // 10^x ; default ~2e-4
 const batchSize = ref(4)
 const maxLength = ref(512)
 
+const DEFAULT_ADVANCED = {
+  epochs: 3,
+  learningRateExp: -3.7,
+  batchSize: 4,
+  maxLength: 512,
+}
+
+const isAdvancedModified = computed(() => {
+  return (
+    epochs.value !== DEFAULT_ADVANCED.epochs ||
+    Math.abs(learningRateExp.value - DEFAULT_ADVANCED.learningRateExp) > 0.01 ||
+    batchSize.value !== DEFAULT_ADVANCED.batchSize ||
+    maxLength.value !== DEFAULT_ADVANCED.maxLength
+  )
+})
+
+function resetAdvancedDefaults(): void {
+  epochs.value = DEFAULT_ADVANCED.epochs
+  learningRateExp.value = DEFAULT_ADVANCED.learningRateExp
+  batchSize.value = DEFAULT_ADVANCED.batchSize
+  maxLength.value = DEFAULT_ADVANCED.maxLength
+  toast.info('Settings reset', 'Advanced settings restored to recommended defaults.')
+}
+
 const learningRate = computed(() => Math.pow(10, learningRateExp.value))
 
 const curatedSelected = computed(() => findCurated(selectedCurated.value))
@@ -198,6 +223,108 @@ const searching = ref(false)
 const selectedInfo = ref<HfModelInfo | null>(null)
 const loadingInfo = ref(false)
 let searchTimer: ReturnType<typeof setTimeout> | undefined
+
+// ── Gated model license & access verification ────────────────
+const isGatedSelected = computed(() => {
+  const id = modelId.value.trim()
+  if (!id) return false
+  const foundResult = searchResults.value.find((r) => r.id === id)
+  if (foundResult?.gated) return true
+  const curated = findCurated(id)
+  if (curated?.gated) return true
+  const lower = id.toLowerCase()
+  return (
+    lower.includes('meta-llama') ||
+    lower.includes('llama-') ||
+    lower.includes('gemma-') ||
+    lower.includes('mistralai/')
+  )
+})
+
+const gatedHfUrl = computed(() => {
+  const id = modelId.value.trim()
+  return id ? `https://huggingface.co/${id}` : 'https://huggingface.co'
+})
+
+const isGatedTrainingError = computed(() => {
+  const err = (training.status?.error || '').toLowerCase()
+  const sug = (training.status?.suggestion || '').toLowerCase()
+  return (
+    err.includes('403') ||
+    err.includes('gated') ||
+    err.includes('restricted') ||
+    sug.includes('gated') ||
+    sug.includes('403') ||
+    sug.includes('huggingface.co')
+  )
+})
+
+const errorHfUrl = computed(() => {
+  const modelName = training.status?.model_name || modelId.value.trim()
+  return modelName ? `https://huggingface.co/${modelName}` : 'https://huggingface.co'
+})
+
+const gatedAccess = ref<{ checking: boolean; access: boolean | null; reason: string | null; message: string | null }>({
+  checking: false,
+  access: null,
+  reason: null,
+  message: null,
+})
+
+const tokenInput = ref('')
+const savingToken = ref(false)
+const showTokenForm = ref(false)
+
+async function verifyGatedAccess(): Promise<void> {
+  const id = modelId.value.trim()
+  if (!id || !isGatedSelected.value) {
+    gatedAccess.value = { checking: false, access: null, reason: null, message: null }
+    return
+  }
+  gatedAccess.value.checking = true
+  try {
+    const res = await api.checkHfAccess(id)
+    gatedAccess.value = { checking: false, access: res.access, reason: res.reason, message: res.message }
+  } catch {
+    gatedAccess.value = { checking: false, access: false, reason: 'error', message: 'Could not check access' }
+  }
+}
+
+async function saveTokenFromUi(): Promise<void> {
+  const t = tokenInput.value.trim()
+  if (!t) {
+    toast.error('Token empty', 'Please paste a valid Hugging Face token.')
+    return
+  }
+  savingToken.value = true
+  try {
+    const res = await api.updateHfToken(t)
+    toast.success('Token Saved!', res.message)
+    tokenInput.value = ''
+    showTokenForm.value = false
+    await verifyGatedAccess()
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail
+    toast.error(detail?.error ?? 'Failed to save token', detail?.suggestion)
+  } finally {
+    savingToken.value = false
+  }
+}
+
+watch(modelId, () => void verifyGatedAccess(), { immediate: true })
+
+function onWindowFocus(): void {
+  if (isGatedSelected.value) {
+    void verifyGatedAccess()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('focus', onWindowFocus)
+})
+onUnmounted(() => {
+  window.removeEventListener('focus', onWindowFocus)
+})
 
 async function runSearch(): Promise<void> {
   searching.value = true
@@ -831,6 +958,128 @@ const canProceed = computed(() => {
             Size unknown from the name — we'll confirm when training starts.
           </span>
         </div>
+
+        <!-- Gated Model License Notice with Real-Time Access Check & In-UI Token Input -->
+        <div
+          v-if="isGatedSelected"
+          class="mt-3 rounded-xl border p-3.5 text-xs text-fg transition-all duration-300 space-y-3"
+          :class="
+            gatedAccess.checking
+              ? 'border-line bg-surface-2'
+              : gatedAccess.access === true
+                ? 'border-success/40 bg-success/10'
+                : 'border-accent/40 bg-accent/10'
+          "
+        >
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2.5 min-w-0">
+              <Loader2 v-if="gatedAccess.checking" class="h-4 w-4 animate-spin text-accent shrink-0" />
+              <CheckCircle2 v-else-if="gatedAccess.access === true" class="h-4 w-4 text-success shrink-0" />
+              <span v-else class="text-base shrink-0">🔒</span>
+
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="font-semibold text-fg">
+                    {{
+                      gatedAccess.checking
+                        ? 'Verifying Hugging Face Access…'
+                        : gatedAccess.access === true
+                          ? '✓ License Terms Accepted'
+                          : 'Gated Model License Required'
+                    }}
+                  </span>
+                  <span
+                    v-if="gatedAccess.access === true"
+                    class="rounded bg-success/20 px-1.5 py-0.5 text-[10px] font-semibold text-success"
+                  >
+                    Ready
+                  </span>
+                </div>
+                <p class="text-fg-subtle truncate">
+                  {{
+                    gatedAccess.checking
+                      ? 'Checking HF_TOKEN permissions for this model…'
+                      : gatedAccess.access === true
+                        ? 'Your Hugging Face account has active permission to download this model.'
+                        : gatedAccess.message || 'Click below to accept terms on Hugging Face or update your HF_TOKEN.'
+                  }}
+                </p>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                class="btn-ghost py-1 px-2 text-xs"
+                :disabled="gatedAccess.checking"
+                title="Re-check Hugging Face access"
+                @click="verifyGatedAccess"
+              >
+                ↻
+              </button>
+
+              <button
+                type="button"
+                class="btn-secondary py-1 px-2.5 text-xs gap-1 inline-flex items-center"
+                @click="showTokenForm = !showTokenForm"
+              >
+                <span>🔑 {{ showTokenForm ? 'Hide Token Form' : 'Update HF Token' }}</span>
+              </button>
+
+              <a
+                v-if="gatedAccess.access !== true"
+                :href="gatedHfUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-accent/90 shrink-0"
+              >
+                <span>Accept Terms on HF</span>
+                <ExternalLink class="h-3.5 w-3.5" />
+              </a>
+            </div>
+          </div>
+
+          <!-- In-UI Token Form -->
+          <div
+            v-if="showTokenForm || gatedAccess.reason === 'token_permission' || gatedAccess.reason === 'no_token'"
+            class="rounded-xl border border-line bg-surface p-3.5 space-y-2.5 shadow-sm"
+          >
+            <div class="flex items-center justify-between">
+              <label class="font-semibold text-fg text-xs flex items-center gap-1.5">
+                <span>🔑 Save Hugging Face Token</span>
+                <span class="text-fg-subtle font-normal">(Auto-saves to .env & memory)</span>
+              </label>
+              <a
+                href="https://huggingface.co/settings/tokens"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-[11px] text-accent hover:underline inline-flex items-center gap-1"
+              >
+                <span>Create Classic (Read) Token on HF</span>
+                <ExternalLink class="h-3 w-3" />
+              </a>
+            </div>
+
+            <div class="flex gap-2">
+              <input
+                v-model="tokenInput"
+                type="password"
+                class="input-field py-1.5 text-xs font-mono flex-1"
+                placeholder="Paste Classic (Read) Token: hf_xxxxxxxxxxxxxxxxxxxxxxxx"
+                @keyup.enter="saveTokenFromUi"
+              />
+              <button
+                type="button"
+                class="btn-gradient py-1.5 px-4 text-xs font-semibold shrink-0"
+                :disabled="savingToken || !tokenInput.trim()"
+                @click="saveTokenFromUi"
+              >
+                <Loader2 v-if="savingToken" class="h-3.5 w-3.5 animate-spin" />
+                <span v-else>Save Token</span>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Advanced settings -->
@@ -848,14 +1097,34 @@ const canProceed = computed(() => {
         leave-active-class="transition duration-200"
         leave-to-class="opacity-0"
       >
-        <div v-if="showAdvanced" class="mt-6 space-y-6">
+        <div v-if="showAdvanced" class="mt-6 space-y-6 rounded-2xl border border-line bg-surface-2/60 p-5 shadow-sm">
+          <!-- Advanced Settings Header -->
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line/60 pb-3.5">
+            <div>
+              <h4 class="text-sm font-semibold text-fg">Advanced Training Hyperparameters</h4>
+              <p class="text-xs text-fg-subtle">Customize learning settings or restore recommended defaults.</p>
+            </div>
+            <button
+              type="button"
+              class="btn-secondary py-1.5 px-3 text-xs gap-1.5 shrink-0 inline-flex items-center"
+              :class="isAdvancedModified ? 'border-accent/50 text-accent font-medium' : 'opacity-70'"
+              @click="resetAdvancedDefaults"
+            >
+              <RotateCcw class="h-3.5 w-3.5" />
+              <span>Reset to Recommended</span>
+            </button>
+          </div>
+
           <!-- Epochs -->
           <div>
             <div class="flex items-center justify-between">
               <label class="flex items-center gap-1.5 text-sm font-medium text-fg-muted">
                 Epochs <HelpTip text="How many times the model sees your whole dataset. More epochs = more learning, but too many can overfit." />
               </label>
-              <span class="font-mono text-sm text-accent">{{ epochs }}</span>
+              <div class="flex items-center gap-2">
+                <span class="rounded bg-surface px-2 py-0.5 font-mono text-[11px] text-fg-subtle">Rec: 3</span>
+                <span class="font-mono text-sm font-semibold text-accent">{{ epochs }}</span>
+              </div>
             </div>
             <input v-model.number="epochs" type="range" min="1" max="10" step="1" class="mt-2 w-full accent-accent" />
           </div>
@@ -866,7 +1135,10 @@ const canProceed = computed(() => {
               <label class="flex items-center gap-1.5 text-sm font-medium text-fg-muted">
                 Learning Rate <HelpTip text="How big each learning step is. Too high and training is unstable; too low and it learns slowly. 2e-4 is a safe default." />
               </label>
-              <span class="font-mono text-sm text-accent">{{ learningRate.toExponential(1) }}</span>
+              <div class="flex items-center gap-2">
+                <span class="rounded bg-surface px-2 py-0.5 font-mono text-[11px] text-fg-subtle">Rec: 2.0e-4</span>
+                <span class="font-mono text-sm font-semibold text-accent">{{ learningRate.toExponential(1) }}</span>
+              </div>
             </div>
             <input v-model.number="learningRateExp" type="range" min="-5" max="-3" step="0.05" class="mt-2 w-full accent-accent" />
           </div>
@@ -877,7 +1149,10 @@ const canProceed = computed(() => {
               <label class="flex items-center gap-1.5 text-sm font-medium text-fg-muted">
                 Batch Size <HelpTip text="How many examples are processed at once. Higher uses more GPU memory but trains faster." />
               </label>
-              <span class="font-mono text-sm text-accent">{{ batchSize }}</span>
+              <div class="flex items-center gap-2">
+                <span class="rounded bg-surface px-2 py-0.5 font-mono text-[11px] text-fg-subtle">Rec: 4</span>
+                <span class="font-mono text-sm font-semibold text-accent">{{ batchSize }}</span>
+              </div>
             </div>
             <input v-model.number="batchSize" type="range" min="1" max="16" step="1" class="mt-2 w-full accent-accent" />
           </div>
@@ -888,7 +1163,10 @@ const canProceed = computed(() => {
               <label class="flex items-center gap-1.5 text-sm font-medium text-fg-muted">
                 Max Sequence Length <HelpTip text="The maximum number of tokens per example. Longer sequences need much more GPU memory." />
               </label>
-              <span class="font-mono text-sm text-accent">{{ maxLength }}</span>
+              <div class="flex items-center gap-2">
+                <span class="rounded bg-surface px-2 py-0.5 font-mono text-[11px] text-fg-subtle">Rec: 512</span>
+                <span class="font-mono text-sm font-semibold text-accent">{{ maxLength }}</span>
+              </div>
             </div>
             <input v-model.number="maxLength" type="range" min="64" max="2048" step="64" class="mt-2 w-full accent-accent" />
           </div>
@@ -1038,10 +1316,41 @@ const canProceed = computed(() => {
           <LogTerminal :lines="training.logs" />
         </div>
 
-        <!-- Error -->
-        <div v-if="training.status?.error" class="rounded-xl border border-danger/30 bg-danger/10 p-4 text-sm">
-          <p class="font-semibold text-danger">{{ training.status.error }}</p>
-          <p v-if="training.status.suggestion" class="mt-1 text-fg-muted">{{ training.status.suggestion }}</p>
+        <!-- Error Card with Action Buttons Bar -->
+        <div v-if="training.status?.error" class="rounded-2xl border border-danger/40 bg-danger/10 p-5 text-sm space-y-4 shadow-sm">
+          <div class="flex items-start gap-3">
+            <AlertTriangle class="h-5 w-5 shrink-0 text-danger mt-0.5" />
+            <div>
+              <p class="font-bold text-danger text-base">{{ training.status.error }}</p>
+              <p v-if="training.status.suggestion" class="mt-1.5 text-fg-muted leading-relaxed">{{ training.status.suggestion }}</p>
+            </div>
+          </div>
+
+          <!-- Interactive Action Buttons -->
+          <div class="flex flex-wrap items-center gap-3 pt-2 border-t border-danger/20">
+            <a
+              v-if="isGatedTrainingError"
+              :href="errorHfUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-2 rounded-xl bg-success px-4 py-2.5 text-xs font-bold text-white shadow-md transition-all hover:bg-success/90 hover:scale-[1.02] shrink-0"
+            >
+              <span>🔒 Open Hugging Face Page to Accept License Terms</span>
+              <ExternalLink class="h-4 w-4" />
+            </a>
+
+            <button
+              v-if="training.status?.status === 'failed'"
+              type="button"
+              class="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-xs font-bold text-white shadow-md transition-all hover:bg-accent/90 hover:scale-[1.02] shrink-0"
+              :disabled="starting"
+              @click="startTraining"
+            >
+              <Loader2 v-if="starting" class="h-4 w-4 animate-spin" />
+              <RotateCcw v-else class="h-4 w-4" />
+              <span>Retry Training</span>
+            </button>
+          </div>
         </div>
 
         <!-- Actions -->

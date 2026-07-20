@@ -7,6 +7,13 @@ talk to the API during local development.
 
 from __future__ import annotations
 
+try:
+    # pyrefly: ignore [missing-import]
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

@@ -129,7 +129,7 @@ def run_training(job_id: str, params: dict[str, Any]) -> None:
     try:
         _train_impl(job_id, params)
     except Exception as exc:  # noqa: BLE001 - top-level guard, report everything
-        error, suggestion = _humanize_error(exc)
+        error, suggestion = _humanize_error(exc, params.get("model_name", ""))
         log_error(job_id, f"{error} — {suggestion}")
         log_error(job_id, traceback.format_exc())
         save_job(
@@ -228,15 +228,17 @@ def _train_body(job_id: str, params: dict[str, Any]) -> tuple[Any, Any]:
 
     from downloads import ensure_model_downloaded
 
+    hf_token = _os.getenv("HF_TOKEN") or _os.getenv("HUGGING_FACE_HUB_TOKEN") or None
+
     ensure_model_downloaded(
         job_id,
         model_name,
-        token=_os.getenv("HF_TOKEN") or _os.getenv("HUGGING_FACE_HUB_TOKEN"),
+        token=hf_token,
     )
 
     # ── Detect architecture ─────────────────────────────────
     log_info(job_id, "Inspecting model architecture...")
-    config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(model_name, trust_remote_code=True, token=hf_token)
     is_seq2seq = bool(getattr(config, "is_encoder_decoder", False))
     arch = "seq2seq (T5-style)" if is_seq2seq else "causal LM (GPT-style)"
     log_info(job_id, f"Detected architecture: {arch}")
@@ -244,7 +246,7 @@ def _train_body(job_id: str, params: dict[str, Any]) -> tuple[Any, Any]:
     # ── Tokenizer ───────────────────────────────────────────
     # load_tokenizer() falls back to the slow tokenizer if the fast (Rust) one
     # can't parse this model's tokenizer.json, so any downloadable model loads.
-    tokenizer = load_tokenizer(model_name)
+    tokenizer = load_tokenizer(model_name, token=hf_token)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token
 
@@ -280,6 +282,8 @@ def _train_body(job_id: str, params: dict[str, Any]) -> tuple[Any, Any]:
         model_kwargs["torch_dtype"] = compute_dtype
 
     model_kwargs["trust_remote_code"] = True
+    if hf_token:
+        model_kwargs["token"] = hf_token
     model = model_cls.from_pretrained(model_name, **model_kwargs)
     log_info(job_id, "Base model loaded")
 
@@ -717,9 +721,23 @@ def _auto_target_modules(model: Any) -> list[str]:
     return found or ["q_proj", "v_proj"]
 
 
-def _humanize_error(exc: Exception) -> tuple[str, str]:
+def _humanize_error(exc: Exception, model_name: str = "") -> tuple[str, str]:
     """Map a raw exception to a friendly (error, suggestion) pair."""
     text = str(exc).lower()
+    if "fine-grained" in text or "canreadgatedrepos" in text or "gated repositories in your" in text:
+        return (
+            f"HF_TOKEN permission issue for gated model '{model_name or 'Hugging Face'}'.",
+            "Your HF_TOKEN is a Fine-Grained token with 'Access to public gated repos' turned OFF. Go to https://huggingface.co/settings/tokens, create a 'Classic (Read)' token or enable 'Read access to public gated repos', update your .env file, then try again.",
+        )
+    if any(
+        s in text
+        for s in ("gated repo", "403 client error", "restricted", "authorized list", "access to model")
+    ):
+        url = f"https://huggingface.co/{model_name}" if model_name else "Hugging Face"
+        return (
+            f"Access restricted for gated model '{model_name or 'Hugging Face'}' (403 Forbidden).",
+            f"You must accept the model license terms first. Visit {url} in your browser to grant access, ensure your HF_TOKEN is in .env, then try again.",
+        )
     if (
         "untagged enum" in text
         or "modelwrapper" in text

@@ -222,6 +222,18 @@ export const api = {
     return data
   },
 
+  async checkHfAccess(modelId: string): Promise<{ access: boolean; gated: boolean; reason: string; message: string }> {
+    const { data } = await http.get('/api/hf/check-access', {
+      params: { model_id: modelId },
+    })
+    return data
+  },
+
+  async updateHfToken(token: string): Promise<{ success: boolean; message: string; username: string; can_read_gated: boolean }> {
+    const { data } = await http.post('/api/hf/token', { token })
+    return data
+  },
+
   // ── GGUF export ──
   async exportGguf(jobId: string, quant: string): Promise<{ export_id: string; quant: string }> {
     const { data } = await http.post(`/api/models/${jobId}/export/gguf`, { quant })

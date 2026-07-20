@@ -27,6 +27,8 @@ export interface CuratedModel {
   vramGb: number
   /** Marks the recommended default for most users. */
   recommended?: boolean
+  /** Indicates if the model requires license acceptance / HF_TOKEN. */
+  gated?: boolean
 }
 
 export const CURATED_MODELS: CuratedModel[] = [
