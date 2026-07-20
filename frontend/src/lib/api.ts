@@ -36,6 +36,9 @@ export interface DatasetValidation {
   detected: ColumnPreview[]
   sample_rows: Record<string, unknown>[]
   file_size_bytes: number
+  quality_score?: number
+  raw_items_found?: number
+  clean_pairs_count?: number
   error: string | null
   suggestion: string | null
   dataset_id: string | null
@@ -127,6 +130,25 @@ export const api = {
       '/api/dataset/validate',
       form,
       { headers: { 'Content-Type': 'multipart/form-data' } },
+    )
+    return data
+  },
+
+  async extractAndCleanDataset(file: File): Promise<DatasetValidation> {
+    const form = new FormData()
+    form.append('file', file)
+    const { data } = await http.post<DatasetValidation>(
+      '/api/dataset/extract-and-clean',
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    )
+    return data
+  },
+
+  async extractUrlDataset(url: string): Promise<DatasetValidation> {
+    const { data } = await http.post<DatasetValidation>(
+      '/api/dataset/extract-url',
+      { url },
     )
     return data
   },

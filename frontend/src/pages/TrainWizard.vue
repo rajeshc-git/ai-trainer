@@ -17,6 +17,10 @@ import {
   ExternalLink,
   TrendingUp,
   Search,
+  Globe,
+  FileText,
+  Layers,
+  ShieldCheck,
 } from 'lucide-vue-next'
 import StepperNav from '@/components/StepperNav.vue'
 import DropZone from '@/components/DropZone.vue'
@@ -65,24 +69,50 @@ function downloadTemplate(): void {
   toast.success('Template downloaded', 'Fill it in and upload it in step 2.')
 }
 
-// ── Step 2 upload + validation ──────────────────────────────
+// ── Step 2 upload + CEF pipeline validation ──────────────────────────────
 const validation = ref<DatasetValidation | null>(null)
 const validating = ref(false)
+const inputTab = ref<'file' | 'url'>('file')
+const urlInput = ref('')
+const urlExtracting = ref(false)
 
 async function onFile(file: File): Promise<void> {
   validating.value = true
   validation.value = null
   try {
-    validation.value = await api.validateDataset(file)
+    // Use CEF engine to clean and extract from any document type (PDF, Excel, CSV, TXT, JSON)
+    validation.value = await api.extractAndCleanDataset(file)
     if (validation.value.valid) {
-      toast.success('Dataset looks great!', `${validation.value.row_count} rows detected.`)
+      const count = validation.value.clean_pairs_count ?? validation.value.row_count
+      toast.success('CEF Data Extraction Complete!', `${count} clean training pairs extracted.`)
     } else {
-      toast.error('Dataset needs fixing', validation.value.error ?? undefined)
+      toast.error('Extraction failed', validation.value.error ?? undefined)
     }
   } catch {
-    toast.error('Validation failed', 'Could not reach the backend.')
+    toast.error('Validation failed', 'Could not reach the backend CEF engine.')
   } finally {
     validating.value = false
+  }
+}
+
+async function extractFromUrl(): Promise<void> {
+  if (!urlInput.value.trim()) {
+    toast.error('Please enter a URL', 'Provide a valid web page URL starting with http:// or https://')
+    return
+  }
+  urlExtracting.value = true
+  validation.value = null
+  try {
+    validation.value = await api.extractUrlDataset(urlInput.value.trim())
+    if (validation.value.valid) {
+      toast.success('Web Article Extracted!', `${validation.value.clean_pairs_count} pairs generated.`)
+    } else {
+      toast.error('URL Extraction failed', validation.value.error ?? undefined)
+    }
+  } catch {
+    toast.error('Extraction failed', 'Could not fetch content from that URL.')
+  } finally {
+    urlExtracting.value = false
   }
 }
 
@@ -414,72 +444,153 @@ const canProceed = computed(() => {
       </div>
     </section>
 
-    <!-- ───────── STEP 2 — Upload ───────── -->
+    <!-- ───────── STEP 2 — CEF Upload & Extraction ───────── -->
     <section v-show="current === 1" class="glass p-6 md:p-8">
-      <div class="flex items-center gap-2">
-        <h2 class="text-xl font-bold text-fg">Step 2 · Upload your dataset</h2>
-        <HelpTip text="Drop the CSV you filled in. We'll check the columns and show you a preview before training." />
+      <div class="flex items-center justify-between gap-4">
+        <div class="flex items-center gap-2">
+          <h2 class="text-xl font-bold text-fg">Step 2 · Ingest & Clean Dataset (CEF Pipeline)</h2>
+          <HelpTip text="Upload any PDF manual, Excel sheet, CSV, TXT, JSON, or enter a web URL. The CEF engine will automatically clean, extract, and convert it into fine-tuning pairs." />
+        </div>
+        <div class="flex items-center gap-1 rounded-xl border border-line bg-surface-2 p-1 text-xs font-semibold">
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-all"
+            :class="inputTab === 'file' ? 'bg-accent text-white shadow-sm' : 'text-fg-muted hover:text-fg'"
+            @click="inputTab = 'file'"
+          >
+            <FileText class="h-3.5 w-3.5" />
+            File Ingestion
+          </button>
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-all"
+            :class="inputTab === 'url' ? 'bg-accent text-white shadow-sm' : 'text-fg-muted hover:text-fg'"
+            @click="inputTab = 'url'"
+          >
+            <Globe class="h-3.5 w-3.5" />
+            URL Scraper
+          </button>
+        </div>
       </div>
 
-      <div class="mt-6">
+      <!-- File Ingestion Mode -->
+      <div v-if="inputTab === 'file'" class="mt-6">
         <DropZone @file="onFile" />
       </div>
 
+      <!-- URL Scraper Mode -->
+      <div v-else class="mt-6 rounded-2xl border border-line bg-surface-2 p-6">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div class="relative flex-1">
+            <Globe class="absolute left-3.5 top-3 h-5 w-5 text-fg-muted" />
+            <input
+              v-model="urlInput"
+              type="url"
+              placeholder="https://example.com/article-or-documentation"
+              class="w-full rounded-xl border border-line bg-surface py-2.5 pl-11 pr-4 text-sm text-fg outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+              @keydown.enter="extractFromUrl"
+            />
+          </div>
+          <button
+            class="btn-gradient shrink-0"
+            :disabled="urlExtracting || !urlInput.trim()"
+            @click="extractFromUrl"
+          >
+            <Loader2 v-if="urlExtracting" class="h-4 w-4 animate-spin" />
+            <Sparkles v-else class="h-4 w-4" />
+            <span>{{ urlExtracting ? 'Extracting URL…' : 'Extract Pairs' }}</span>
+          </button>
+        </div>
+        <p class="mt-2 text-xs text-fg-muted">
+          Scrapes public web content, strips headers/navigation noise, and converts body text into Q&A fine-tuning pairs.
+        </p>
+      </div>
+
       <!-- Validating skeleton -->
-      <div v-if="validating" class="mt-6 space-y-3">
+      <div v-if="validating || urlExtracting" class="mt-6 space-y-3">
+        <div class="flex items-center gap-2 text-sm text-accent">
+          <Loader2 class="h-4 w-4 animate-spin" />
+          <span>CEF Engine running: cleaning, deduplicating, and extracting prompt-response pairs…</span>
+        </div>
         <div class="skeleton h-6 w-40" />
         <div class="skeleton h-32 w-full" />
       </div>
 
-      <!-- Validation result -->
+      <!-- Validation & CEF Extraction Result -->
       <div v-else-if="validation" class="mt-6 space-y-4">
         <div
-          class="flex items-start gap-3 rounded-xl border p-4"
+          class="flex items-start justify-between gap-3 rounded-xl border p-4"
           :class="datasetValid ? 'border-success/30 bg-success/10' : 'border-danger/30 bg-danger/10'"
         >
-          <component
-            :is="datasetValid ? CheckCircle2 : XCircle"
-            class="mt-0.5 h-5 w-5 shrink-0"
-            :class="datasetValid ? 'text-success' : 'text-danger'"
-          />
-          <div class="text-sm">
-            <p class="font-semibold text-fg">
-              {{ datasetValid ? `Valid dataset — ${validation.row_count} rows` : validation.error }}
-            </p>
-            <p v-if="validation.suggestion" class="mt-0.5 text-fg-muted">
-              {{ validation.suggestion }}
-            </p>
-            <p class="mt-1 text-xs text-fg-muted">
-              {{ (validation.file_size_bytes / 1024).toFixed(1) }} KB
-            </p>
+          <div class="flex items-start gap-3">
+            <component
+              :is="datasetValid ? CheckCircle2 : XCircle"
+              class="mt-0.5 h-5 w-5 shrink-0"
+              :class="datasetValid ? 'text-success' : 'text-danger'"
+            />
+            <div class="text-sm">
+              <p class="font-semibold text-fg">
+                {{
+                  datasetValid
+                    ? `CEF Extraction Complete — ${validation.clean_pairs_count ?? validation.row_count} Clean Pairs Generated`
+                    : validation.error
+                }}
+              </p>
+              <p v-if="validation.suggestion" class="mt-0.5 text-fg-muted">
+                {{ validation.suggestion }}
+              </p>
+              <div v-if="datasetValid" class="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                <span class="inline-flex items-center gap-1 text-fg-muted">
+                  <Layers class="h-3.5 w-3.5 text-accent" />
+                  Raw Items Found: <strong class="text-fg">{{ validation.raw_items_found ?? validation.row_count }}</strong>
+                </span>
+                <span class="inline-flex items-center gap-1 text-fg-muted">
+                  <ShieldCheck class="h-3.5 w-3.5 text-success" />
+                  Clean Pairs: <strong class="text-fg">{{ validation.clean_pairs_count ?? validation.row_count }}</strong>
+                </span>
+              </div>
+            </div>
           </div>
-        </div>
 
-        <!-- Column detection -->
-        <div class="flex flex-wrap gap-2">
-          <span
-            v-for="col in validation.detected"
-            :key="col.name"
-            class="badge"
-            :class="col.present ? 'bg-success/15 text-success' : 'bg-danger/15 text-danger'"
-          >
-            <component :is="col.present ? CheckCircle2 : XCircle" class="h-3.5 w-3.5" />
-            {{ col.name }}
-          </span>
+          <!-- Quality Score Meter -->
+          <div v-if="datasetValid && validation.quality_score != null" class="flex flex-col items-end shrink-0">
+            <span class="text-[10px] uppercase tracking-wider text-fg-muted">CEF Quality Score</span>
+            <div class="mt-0.5 flex items-center gap-1.5">
+              <span class="text-lg font-extrabold text-success">{{ validation.quality_score }}%</span>
+              <div class="h-2 w-16 overflow-hidden rounded-full bg-surface-2">
+                <div
+                  class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400"
+                  :style="{ width: `${validation.quality_score}%` }"
+                />
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Preview table -->
         <div v-if="validation.sample_rows.length" class="overflow-x-auto rounded-xl border border-line">
+          <div class="flex items-center justify-between border-b border-line bg-surface-2 px-4 py-2 text-xs font-semibold text-fg">
+            <span>Extracted Fine-Tuning Sample Pairs (Showing First 10)</span>
+            <span class="text-fg-muted">CSV output format ready for trainer</span>
+          </div>
           <table class="w-full text-left text-sm">
-            <thead class="bg-surface-2 text-xs uppercase tracking-wide text-fg-muted">
+            <thead class="bg-surface-2/60 text-xs uppercase tracking-wide text-fg-muted">
               <tr>
-                <th v-for="c in validation.columns" :key="c" class="px-4 py-2">{{ c }}</th>
+                <th class="px-4 py-2">Instruction / Context</th>
+                <th class="px-4 py-2">Input (Prompt)</th>
+                <th class="px-4 py-2">Output (Response)</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(row, i) in validation.sample_rows" :key="i" class="border-t border-line">
-                <td v-for="c in validation.columns" :key="c" class="max-w-xs truncate px-4 py-2 text-fg-muted">
-                  {{ row[c] }}
+                <td class="max-w-[150px] truncate px-4 py-2 text-xs text-fg-subtle">
+                  {{ row['instruction'] || 'Standard Q&A' }}
+                </td>
+                <td class="max-w-xs truncate px-4 py-2 text-fg">
+                  {{ row['input'] || row[Object.keys(row)[0]] }}
+                </td>
+                <td class="max-w-md truncate px-4 py-2 text-fg-muted">
+                  {{ row['output'] || row[Object.keys(row)[1]] }}
                 </td>
               </tr>
             </tbody>

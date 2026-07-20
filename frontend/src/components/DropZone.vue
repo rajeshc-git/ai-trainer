@@ -45,7 +45,7 @@ function onDrop(e: DragEvent): void {
     <input
       ref="inputRef"
       type="file"
-      accept=".csv,text/csv"
+      accept=".csv,.xlsx,.xls,.pdf,.txt,.md,.json,.jsonl"
       class="hidden"
       @change="handleFiles(($event.target as HTMLInputElement).files)"
     />
@@ -59,8 +59,16 @@ function onDrop(e: DragEvent): void {
       </div>
 
       <template v-if="!fileName">
-        <p class="text-base font-semibold text-fg">Drop your CSV here or click to browse</p>
-        <p class="text-sm text-fg-muted">Only .csv files with “input” and “output” columns</p>
+        <p class="text-base font-semibold text-fg">Drop your file here or click to browse</p>
+        <p class="text-xs text-fg-muted">
+          Supports <span class="font-medium text-fg">PDF, Excel (.xlsx), CSV, TXT, Markdown (.md), JSON</span>
+        </p>
+        <div class="mt-1 flex flex-wrap justify-center gap-1.5 text-[10px]">
+          <span class="rounded-md bg-accent/10 px-2 py-0.5 font-medium text-accent">PDF Manuals</span>
+          <span class="rounded-md bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-500">Excel / CSV</span>
+          <span class="rounded-md bg-sky-500/10 px-2 py-0.5 font-medium text-sky-500">Web / TXT / MD</span>
+          <span class="rounded-md bg-purple-500/10 px-2 py-0.5 font-medium text-purple-500">JSON / JSONL</span>
+        </div>
       </template>
       <template v-else>
         <p class="text-base font-semibold text-fg">{{ fileName }}</p>

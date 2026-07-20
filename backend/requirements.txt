@@ -24,10 +24,14 @@ sentencepiece==0.2.0
 huggingface_hub>=0.24.6   # model search (HfApi) + download progress (tqdm_class)
 protobuf==4.25.3          # required by llama.cpp's convert_hf_to_gguf.py for some tokenizers
 
-# Data / science
+# Data / science & extraction
 scipy==1.13.1
 scikit-learn==1.5.1
 pandas==2.2.2
+pdfplumber==0.11.4
+openpyxl==3.1.5
+trafilatura==1.12.2
+beautifulsoup4==4.12.3
 
 # NOTE: torch is installed separately in the Dockerfile with the
 # correct CUDA 12.8 (cu128) wheel index, so it is intentionally NOT listed here.
