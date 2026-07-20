@@ -147,38 +147,41 @@ def extract_from_dataframe(df: pd.DataFrame) -> list[ExtractedPair]:
 # Unstructured Text & Document Chunking Parser
 # ─────────────────────────────────────────────────────────────
 def extract_from_raw_text(raw_text: str, default_instruction: str = "Answer the prompt accurately based on context.") -> list[ExtractedPair]:
-    """Parse unstructured text/markdown into structured instruction-response pairs."""
+    """Parse unstructured text/markdown into multiple structured instruction-response pairs."""
     cleaned = clean_text(raw_text)
     if not cleaned:
         return []
 
     pairs: list[ExtractedPair] = []
 
-    # 1. Try Q&A / Heading pattern extraction
-    # Pattern e.g. "Q: ... A: ..." or "Question: ... Answer: ..."
+    # 1. Try Q&A pattern extraction (all Q: / A: blocks)
     qa_blocks = re.findall(
         r"(?:Q|Question|Prompt|Input):\s*(.*?)\n+(?:A|Answer|Response|Output):\s*(.*?)(?=\n+(?:Q|Question|Prompt|Input):|\Z)",
         cleaned,
         re.DOTALL | re.IGNORECASE,
     )
-    if qa_blocks:
+    if qa_blocks and len(qa_blocks) >= 2:
         for q, a in qa_blocks:
             q_clean, a_clean = clean_text(q), clean_text(a)
             if q_clean and a_clean:
                 pairs.append(ExtractedPair(q_clean, a_clean, default_instruction))
-        if pairs:
+        if len(pairs) >= 2:
             return pairs
 
-    # 2. Heading-based chunking (Markdown `# Heading` or capitalized titles)
-    sections = re.split(r"\n(?=#+\s+|\b[A-Z0-9\.\s]{3,40}\b\n)", cleaned)
-    if len(sections) > 1:
-        for sec in sections:
+    # 2. Split into blocks/sections by headings or blank lines
+    # Split on Markdown headers (#, ##, ###), HTML tags, or lines that look like headings
+    raw_sections = re.split(r"\n+(?=#+\s+|\b[A-Z0-9\.\-\_\s]{3,60}\b(?:\:\n|\n))", cleaned)
+    if len(raw_sections) >= 2:
+        for sec in raw_sections:
             sec_clean = sec.strip()
-            lines = sec_clean.split("\n", 1)
-            if len(lines) == 2:
-                heading, body = lines[0].strip("# ").strip(), lines[1].strip()
+            if not sec_clean:
+                continue
+            lines = [l.strip() for l in sec_clean.split("\n") if l.strip()]
+            if len(lines) >= 2:
+                heading = lines[0].strip("# ").strip()
+                body = " ".join(lines[1:])
                 heading_clean, body_clean = clean_text(heading), clean_text(body)
-                if heading_clean and len(body_clean) >= 20:
+                if len(heading_clean) >= 3 and len(body_clean) >= 30:
                     pairs.append(
                         ExtractedPair(
                             input_text=f"Explain or summarize: {heading_clean}",
@@ -186,28 +189,44 @@ def extract_from_raw_text(raw_text: str, default_instruction: str = "Answer the 
                             instruction=default_instruction,
                         )
                     )
-        if pairs:
-            return pairs
 
-    # 3. Fallback: Paragraph sliding-window chunking
-    paragraphs = [p.strip() for p in cleaned.split("\n\n") if len(p.strip()) >= 30]
-    for i in range(0, len(paragraphs) - 1, 2):
-        inp_chunk = paragraphs[i]
-        out_chunk = paragraphs[i + 1]
-        pairs.append(
-            ExtractedPair(
-                input_text=f"Explain the following concept: {inp_chunk[:150]}...",
-                output_text=out_chunk,
-                instruction=default_instruction,
-            )
-        )
-    # If odd paragraphs or single block, create self-contained prompt
-    if not pairs and paragraphs:
-        for p in paragraphs:
+    # 3. If heading split produced 0 or 1 pair, perform robust paragraph & sentence chunking
+    if len(pairs) < 2:
+        pairs.clear()
+        # Normalize newlines and split by paragraphs
+        paragraphs = [p.strip() for p in re.split(r"\n{2,}", cleaned) if len(p.strip()) >= 30]
+        if len(paragraphs) <= 1:
+            # Split long text by sentences into ~350 character chunks
+            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if len(s.strip()) >= 15]
+            paragraphs = []
+            buf = []
+            curr_len = 0
+            for sent in sentences:
+                buf.append(sent)
+                curr_len += len(sent)
+                if curr_len >= 300:
+                    paragraphs.append(" ".join(buf))
+                    buf = []
+                    curr_len = 0
+            if buf:
+                paragraphs.append(" ".join(buf))
+
+        # Create multiple instruction-response pairs from paragraph chunks
+        for i, para in enumerate(paragraphs):
+            para_clean = clean_text(para)
+            if len(para_clean) < 30:
+                continue
+            # Extract first sentence or summary fragment for prompt input
+            first_sentence = para_clean.split(".")[0].strip()
+            if len(first_sentence) >= 10 and len(first_sentence) <= 120:
+                prompt_input = f"What details are provided about: {first_sentence}?"
+            else:
+                prompt_input = f"Summarize the key information in section {i + 1}."
+
             pairs.append(
                 ExtractedPair(
-                    input_text="Provide a detailed explanation based on the context.",
-                    output_text=p,
+                    input_text=prompt_input,
+                    output_text=para_clean,
                     instruction=default_instruction,
                 )
             )
@@ -223,6 +242,7 @@ def extract_from_pdf_bytes(pdf_bytes: bytes) -> list[ExtractedPair]:
     text_content = ""
     # Try pdfplumber first
     try:
+        # pyrefly: ignore [missing-import]
         import pdfplumber
 
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -235,6 +255,7 @@ def extract_from_pdf_bytes(pdf_bytes: bytes) -> list[ExtractedPair]:
     except Exception:
         # Fallback to pypdf / PyPDF2 if pdfplumber fails or is not available
         try:
+            # pyrefly: ignore [missing-import]
             import pypdf
 
             reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
@@ -261,6 +282,7 @@ async def extract_from_url(url: str) -> list[ExtractedPair]:
     main_text = ""
     # Try trafilatura first
     try:
+        # pyrefly: ignore [missing-import]
         import trafilatura
 
         extracted = trafilatura.extract(html_content)
