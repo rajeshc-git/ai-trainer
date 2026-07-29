@@ -1,4 +1,5 @@
 # 🧠 AI Trainer
+<img width="1536" height="1024" alt="ChatGPT Image Jul 29, 2026, 01_59_42 PM" src="https://github.com/user-attachments/assets/3bcc89f0-6814-4d45-aab3-cd002ca8f4b6" />
 
 <p align="center">
   <a href="https://github.com/rajeshc-git/ai-trainer/graphs/contributors">
